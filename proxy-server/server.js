@@ -7,60 +7,45 @@ const app = express();
 app.use(cors());
 
 /* ============================================
-   🔹 다중 언론사 뉴스 순회 크롤러
+   🔹 언론사별 RSS 피드 목록
 ============================================ */
-app.get("/naver-multi", async (req, res) => {
+const pressFeeds = [
+  { name: "매일경제", url: "https://www.mk.co.kr/rss/30000001/" },
+  { name: "한국경제", url: "https://www.hankyung.com/feed/" },
+  { name: "서울신문", url: "https://www.seoul.co.kr/rss/" },
+  { name: "국민일보", url: "https://rss.kmib.co.kr/rss/total.xml" }
+];
+
+/* ============================================
+   🔹 네이버 RSS 기반 뉴스 요약 API
+   예시: /naver-rss?keyword=서울
+============================================ */
+app.get("/naver-rss", async (req, res) => {
   const { keyword } = req.query;
   if (!keyword) return res.status(400).send("Missing keyword");
 
-  const pressCodes = [
-    { id: "009", name: "매일경제" },
-    { id: "015", name: "한국경제" },
-    { id: "005", name: "국민일보" },
-    { id: "081", name: "서울신문" }
-  ];
-
   const results = [];
 
-  for (const press of pressCodes) {
-    const url = `https://media.naver.com/press/${press.id}/newspaper`;
+  for (const press of pressFeeds) {
     try {
-      const response = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" } });
-      const html = await response.text();
-      const $ = cheerio.load(html);
+      const xml = await fetch(press.url, { headers: { "User-Agent": "Mozilla/5.0" } }).then(r => r.text());
+      const $ = cheerio.load(xml, { xmlMode: true });
 
-      const articles = [];
-      $("a.sa_text_strong").each((i, el) => {
-        const title = $(el).text().trim();
-        const link = $(el).attr("href");
-        if (title && title.includes(keyword)) {
-          articles.push({
-            press: press.name,
-            title,
-            link: link.startsWith("http") ? link : `https://n.news.naver.com${link}`
-          });
+      $("item").each((_, el) => {
+        const title = $(el).find("title").text();
+        const link = $(el).find("link").text();
+        const desc = $(el).find("description").text().replace(/<[^>]*>?/gm, "").trim();
+        if (title.includes(keyword) || desc.includes(keyword)) {
+          const summary = desc.split(/(?<=[.!?。！？])\s+/).slice(0, 2).join(" ");
+          results.push({ press: press.name, title, link, summary, full: desc });
         }
       });
-
-      for (const art of articles.slice(0, 3)) {
-        try {
-          const page = await fetch(art.link, { headers: { "User-Agent": "Mozilla/5.0" } });
-          const pageHtml = await page.text();
-          const $$ = cheerio.load(pageHtml);
-          const text = $$("div#dic_area").text().replace(/\s+/g, " ").trim();
-          const sentences = text.split(/(?<=[.!?。！？])\s+/).filter(s => s.length > 30);
-          const summary = sentences.slice(0, 2).join(" ");
-          results.push({ ...art, summary: summary || "요약 불가" });
-        } catch {
-          results.push({ ...art, summary: "요약 실패" });
-        }
-      }
     } catch (err) {
-      console.error(`[${press.name}] 크롤링 실패:`, err.message);
+      console.error(`[${press.name}] RSS 오류:`, err.message);
     }
   }
 
-  res.json(results);
+  res.json(results.slice(0, 50));
 });
 
 /* ============================================
