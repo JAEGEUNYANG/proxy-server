@@ -1,3 +1,14 @@
+import express from "express";
+import fetch from "node-fetch";
+import cors from "cors";
+import * as cheerio from "cheerio";
+
+const app = express();
+app.use(cors());
+
+/* ============================================
+   🔹 다중 언론사 뉴스 순회 크롤러
+============================================ */
 app.get("/naver-multi", async (req, res) => {
   const { keyword } = req.query;
   if (!keyword) return res.status(400).send("Missing keyword");
@@ -51,3 +62,9 @@ app.get("/naver-multi", async (req, res) => {
 
   res.json(results);
 });
+
+/* ============================================
+   ✅ 서버 실행
+============================================ */
+const port = process.env.PORT || 8080;
+app.listen(port, () => console.log(`✅ Proxy running on port ${port}`));
