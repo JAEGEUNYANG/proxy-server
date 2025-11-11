@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>📰 뉴스 요약 & 키워드 추출기</title>
+<script src="https://cdn.jsdelivr.net/npm/@mozilla/readability@0.5.0/Readability.min.js"></script>
+<style>
+body { background:#0b1020; color:#e8eefc; font-family:sans-serif; padding:20px; transition:0.3s; }
+h2 { margin-top:0; }
+input,button,select { padding:8px 10px; border:none; border-radius:6px; font-size:14px; }
+input { width:60%; }
+button { background:#6ea8ff; color:#08132e; font-weight:bold; cursor:pointer; }
+button.secondary { background:#222b44; color:#bcd1ff; }
+select { background:#151b2f; color:#e8eefc; border:1px solid #2a3354; }
+.row { margin-bottom:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+.article { background:#151b2f; padding:12px; border-radius:10px; margin-top:10px; cursor:pointer; transition:0.2s; }
+.article:hover { background:#1f2842; }
+.summary { background:#101528; margin-top:10px; padding:10px; border-radius:8px; white-space:pre-wrap; }
+.keywords { margin-top:6px; color:#b9c9ff; font-size:13px; }
+.hashtags { margin-top:4px; color:#91a8ff; font-size:12px; }
+.small { font-size:12px; color:#aab7dd; margin-top:4px; }
+.theme-toggle { position:fixed; top:15px; right:15px; background:#2c3552; color:#fff; border:none; border-radius:6px; padding:6px 10px; cursor:pointer; }
+.light body { background:#f9fafc; color:#111; }
+.light .article { background:#f1f4f8; color:#111; }
+.light .summary { background:#fff; color:#222; }
+</style>
+</head>
+
+<body>
+<button class="theme-toggle" onclick="toggleTheme()">🌗 테마</button>
+<h2>📰 Bing 뉴스 요약 & 키워드 추출기</h2>
+
+<div class="row">
+  <input id="keyword" placeholder="검색어 입력 (예: 서울시 문화행사)">
+  <button onclick="searchNews()">검색</button>
+</div>
+
+<div class="row">
+  <select id="saved"></select>
+  <button class="secondary" onclick="saveKeyword()">저장</button>
+  <button class="secondary" onclick="deleteKeyword()">삭제</button>
+  <button class="secondary" onclick="clearKeywords()">전체삭제</button>
+</div>
+
+<div class="row">
+  <button class="secondary" onclick="exportCSV()">CSV 내보내기</button>
+  <button class="secondary" onclick="exportMarkdown()">Markdown 내보내기</button>
+</div>
+
+<div id="articles"></div>
+<div class="small">※ 클릭하면 기사 본문을 요약하고 키워드를 추출합니다.</div>
+
+<script>
+// 🔧 Render 프록시 주소 입력 (예시: https://myproxy.onrender.com)
+const PROXY_BASE = "https://your-proxy.onrender.com";
+
+function proxied(url){ return PROXY_BASE + '/proxy?url=' + encodeURIComponent(url); }
+
+async function fetchText(url){
+  const res = await fetch(proxied(url));
+  if (!res.ok) throw new Error("프록시 응답 실패: " + res.status);
+  return await res.text();
+}
+
+// 검색어 저장
+function loadSaved(){
+  const arr = JSON.parse(localStorage.getItem("keywords") || "[]");
+  const sel = document.getElementById("saved");
+  sel.innerHTML = "";
+  const blank = document.createElement("option");
+  blank.value = ""; blank.textContent = "(저장된 검색어 선택)";
+  sel.appendChild(blank);
+  arr.forEach(v=>{
+    const opt = document.createElement("option");
+    opt.value = v; opt.textContent = v;
+    sel.appendChild(opt);
+  });
+}
+function saveKeyword(){
+  const kw = document.getElementById("keyword").value.trim();
+  if (!kw) return alert("저장할 검색어를 입력하세요.");
+  const arr = JSON.parse(localStorage.getItem("keywords") || "[]");
+  if (!arr.includes(kw)) arr.push(kw);
+  localStorage.setItem("keywords", JSON.stringify(arr));
+  loadSaved(); alert("검색어 저장됨 ✅");
+}
+function deleteKeyword(){
+  const sel = document.getElementById("saved");
+  if (!sel.value) return alert("삭제할 검색어를 선택하세요.");
+  let arr = JSON.parse(localStorage.getItem("keywords") || "[]");
+  arr = arr.filter(v => v !== sel.value);
+  localStorage.setItem("keywords", JSON.stringify(arr));
+  loadSaved();
+}
+function clearKeywords(){
+  if (confirm("모든 저장된 검색어를 삭제할까요?")) {
+    localStorage.removeItem("keywords"); loadSaved();
+  }
+}
+document.getElementById("saved").addEventListener("change", e=>{
+  const val = e.target.value;
+  if (val) document.getElementById("keyword").value = val;
+});
+loadSaved();
+
+// 뉴스 검색
+let results = [];
+async function searchNews(){
+  const kw = document.getElementById("keyword").value.trim();
+  if (!kw) return alert("검색어를 입력하세요.");
+  results = [];
+  const rssUrl = `https://www.bing.com/news/search?q=${encodeURIComponent(kw)}&format=rss`;
+  const xml = await fetchText(rssUrl);
+  const doc = new DOMParser().parseFromString(xml, "text/xml");
+  const items = [...doc.querySelectorAll("item")].slice(0, 8);
+  const list = document.getElementById("articles");
+  list.innerHTML = "";
+  if (items.length === 0) return list.innerHTML = "<p>검색 결과가 없습니다.</p>";
+  items.forEach(it=>{
+    const title = it.querySelector("title").textContent;
+    const link = it.querySelector("link").textContent;
+    const pubDate = it.querySelector("pubDate")?.textContent || "";
+    const el = document.createElement("div");
+    el.className = "article"; el.textContent = title;
+    el.onclick = ()=>summarizeArticle({kw, title, link, pubDate}, el);
+    list.appendChild(el);
+  });
+}
+
+// 요약 + 키워드
+async function summarizeArticle(info, el){
+  el.style.opacity = 0.5;
+  try {
+    const html = await fetchText(info.link);
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const article = new Readability(doc).parse();
+    const text = article?.textContent?.trim()?.replace(/\s+/g,' ') || '';
+    if (!text || text.length < 200) throw new Error("본문이 너무 짧음");
+
+    const sentences = text.split(/(?<=[.!?。！？])\s+/).filter(s=>s.length>40);
+    const summary = sentences.slice(0,3).join(' ');
+    const words = text.toLowerCase().replace(/[^가-힣a-z\s]/g,'').split(/\s+/);
+    const freq = {}; words.forEach(w=>{ if (w.length>1) freq[w]=(freq[w]||0)+1; });
+    const top = Object.entries(freq).sort((a,b)=>b[1]-a[1]).slice(0,5).map(v=>v[0]);
+    const hashtags = top.map(t=>'#'+t);
+
+    const div = document.createElement("div");
+    div.className = "summary";
+    div.innerHTML = `<b>요약:</b><br>${summary || '요약 실패'}`;
+    const kwDiv = document.createElement("div");
+    kwDiv.className = "keywords";
+    kwDiv.textContent = "키워드: " + (top.join(', ') || '-');
+    const tagDiv = document.createElement("div");
+    tagDiv.className = "hashtags";
+    tagDiv.textContent = "해시태그: " + (hashtags.join(' ') || '-');
+    el.appendChild(div); el.appendChild(kwDiv); el.appendChild(tagDiv);
+
+    results.push({
+      keyword: info.kw, title: info.title, pubDate: info.pubDate, link: info.link,
+      summary, keywords: top.join(', '), hashtags: hashtags.join(' ')
+    });
+  } catch(e){ alert("본문 추출 실패: " + e.message); }
+  el.style.opacity = 1;
+}
+
+// CSV / Markdown 내보내기
+function exportCSV(){
+  if (!results.length) return alert("내보낼 데이터가 없습니다.");
+  const header = ["검색어","제목","날짜","링크","요약","키워드","해시태그"];
+  const rows = results.map(r => [r.keyword,r.title,r.pubDate,r.link,r.summary,r.keywords,r.hashtags]);
+  const csv = [header, ...rows].map(row=>row.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = "bing_news_summary.csv";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+function exportMarkdown(){
+  if (!results.length) return alert("내보낼 데이터가 없습니다.");
+  let md = `# Bing 뉴스 요약 리포트\n\n`;
+  for(const r of results){
+    md += `## ${r.title}\n- 검색어: ${r.keyword}\n- 날짜: ${r.pubDate}\n- 링크: ${r.link}\n\n${r.summary}\n\n**키워드:** ${r.keywords}\n\n**해시태그:** ${r.hashtags}\n\n`;
+  }
+  const blob = new Blob([md], {type:"text/markdown;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = "bing_news_summary.md";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+function toggleTheme(){ document.body.classList.toggle("light"); }
+</script>
+</body>
+</html>
