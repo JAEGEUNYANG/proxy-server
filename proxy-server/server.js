@@ -18,26 +18,46 @@ const pressFeeds = [
 
 /* ============================================
    🔹 네이버 RSS 기반 뉴스 요약 API
-   예시: /naver-rss?keyword=서울
 ============================================ */
 app.get("/naver-rss", async (req, res) => {
   const { keyword } = req.query;
   if (!keyword) return res.status(400).send("Missing keyword");
 
+  const lowerKey = keyword.toLowerCase();
   const results = [];
 
   for (const press of pressFeeds) {
     try {
-      const xml = await fetch(press.url, { headers: { "User-Agent": "Mozilla/5.0" } }).then(r => r.text());
+      const response = await fetch(press.url, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
+        }
+      });
+      const xml = await response.text();
       const $ = cheerio.load(xml, { xmlMode: true });
 
       $("item").each((_, el) => {
-        const title = $(el).find("title").text();
-        const link = $(el).find("link").text();
-        const desc = $(el).find("description").text().replace(/<[^>]*>?/gm, "").trim();
-        if (title.includes(keyword) || desc.includes(keyword)) {
+        const title = $(el).find("title").text().trim();
+        const link = $(el).find("link").text().trim();
+        let desc = $(el).find("description").html()?.trim() || "";
+        // 🔧 CDATA 안의 HTML을 정리해서 텍스트로 변환
+        desc = desc.replace(/<!\[CDATA\[|\]\]>/g, "")
+                   .replace(/<[^>]*>/g, "")
+                   .replace(/\s+/g, " ")
+                   .trim();
+
+        if (
+          title.toLowerCase().includes(lowerKey) ||
+          desc.toLowerCase().includes(lowerKey)
+        ) {
           const summary = desc.split(/(?<=[.!?。！？])\s+/).slice(0, 2).join(" ");
-          results.push({ press: press.name, title, link, summary, full: desc });
+          results.push({
+            press: press.name,
+            title,
+            link,
+            summary: summary || desc.slice(0, 200),
+            full: desc
+          });
         }
       });
     } catch (err) {
